@@ -6,6 +6,7 @@
     <Project Path="src/Shared.Contracts/Shared.Contracts.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Catalog.Tests/Catalog.Tests.csproj" />
     <Project Path="tests/Order.Tests/Order.Tests.csproj" />
     <Project Path="tests/Payment.Tests/Payment.Tests.csproj" />
   </Folder>
