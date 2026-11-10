@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Payment.Api.Domain;
 
 namespace Payment.Api.Infrastructure;
@@ -26,8 +27,8 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
             InsufficientFundsException or FractionalCentsException =>
                 (StatusCodes.Status422UnprocessableEntity, "Unprocessable Entity", exception.Message),
 
-            IdempotencyConflictException =>
-                (StatusCodes.Status409Conflict, "Idempotency Conflict", exception.Message),
+            IdempotencyConflictException or DbUpdateConcurrencyException =>
+                (StatusCodes.Status409Conflict, "Conflict", exception.Message),
 
             CurrencyMismatchException or InvalidHoldStateException or ArgumentException =>
                 (StatusCodes.Status400BadRequest, "Bad Request", exception.Message),

@@ -7,12 +7,15 @@ namespace Catalog.Api.Services;
 
 public sealed class CatalogService : ICatalogService
 {
+    private const int MaxConcurrencyRetries = 3;
     private readonly CatalogDbContext _dbContext;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<CatalogService> _logger;
 
-    public CatalogService(CatalogDbContext dbContext, ILogger<CatalogService> logger)
+    public CatalogService(CatalogDbContext dbContext, TimeProvider timeProvider, ILogger<CatalogService> logger)
     {
         _dbContext = dbContext;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -89,6 +92,11 @@ public sealed class CatalogService : ICatalogService
             throw new ArgumentException("Reservation items cannot be empty.", nameof(request.Items));
         }
 
+        var consolidatedItems = request.Items
+            .GroupBy(i => i.ProductId)
+            .Select(g => new ReserveStockItem(g.Key, g.Sum(x => x.Quantity)))
+            .ToList();
+
         var existingReservations = await _dbContext.Reservations
             .AsNoTracking()
             .Where(r => r.OrderId == request.OrderId)
@@ -105,37 +113,88 @@ public sealed class CatalogService : ICatalogService
         var strategy = _dbContext.Database.CreateExecutionStrategy();
         return await strategy.ExecuteAsync(async () =>
         {
-            await using var transaction = await _dbContext.Database.BeginTransactionAsync(ct);
-
-            var productIds = request.Items.Select(i => i.ProductId).Distinct().ToList();
-            var products = await _dbContext.Products
-                .Where(p => productIds.Contains(p.Id))
-                .ToDictionaryAsync(p => p.Id, ct);
-
-            var createdReservations = new List<StockReservation>();
-
-            foreach (var item in request.Items)
+            for (var attempt = 1; attempt <= MaxConcurrencyRetries; attempt++)
             {
-                if (!products.TryGetValue(item.ProductId, out var product))
+                try
                 {
-                    throw new ProductNotFoundException(item.ProductId);
-                }
+                    await using var transaction = await _dbContext.Database.BeginTransactionAsync(ct);
 
-                var reservation = product.ReserveStock(request.OrderId, item.Quantity);
-                _dbContext.Reservations.Add(reservation);
-                createdReservations.Add(reservation);
+                    var productIds = consolidatedItems.Select(i => i.ProductId).Distinct().ToList();
+                    var products = await _dbContext.Products
+                        .Where(p => productIds.Contains(p.Id))
+                        .ToDictionaryAsync(p => p.Id, ct);
+
+                    var createdReservations = new List<StockReservation>();
+
+                    foreach (var item in consolidatedItems)
+                    {
+                        if (!products.TryGetValue(item.ProductId, out var product))
+                        {
+                            throw new ProductNotFoundException(item.ProductId);
+                        }
+
+                        var reservation = product.ReserveStock(request.OrderId, item.Quantity);
+                        _dbContext.Reservations.Add(reservation);
+                        createdReservations.Add(reservation);
+                    }
+
+                    await _dbContext.SaveChangesAsync(ct);
+                    await transaction.CommitAsync(ct);
+
+                    _logger.LogInformation("Reserved stock for order {OrderId} across {Count} items",
+                        request.OrderId, createdReservations.Count);
+
+                    return new StockReservationResponse(
+                        request.OrderId,
+                        createdReservations.Select(r => new ReservationItemResponse(r.ProductId, r.Quantity)).ToList(),
+                        ReservationStatus.Reserved);
+                }
+                catch (DbUpdateConcurrencyException ex)
+                {
+                    _logger.LogWarning(ex, "Concurrency conflict during stock reservation for order {OrderId}, attempt {Attempt} of {MaxRetries}",
+                        request.OrderId, attempt, MaxConcurrencyRetries);
+
+                    _dbContext.ChangeTracker.Clear();
+
+                    var productIds = consolidatedItems.Select(i => i.ProductId).Distinct().ToList();
+                    var freshProducts = await _dbContext.Products
+                        .AsNoTracking()
+                        .Where(p => productIds.Contains(p.Id))
+                        .ToDictionaryAsync(p => p.Id, ct);
+
+                    foreach (var item in consolidatedItems)
+                    {
+                        if (freshProducts.TryGetValue(item.ProductId, out var product) && product.AvailableQuantity < item.Quantity)
+                        {
+                            throw new InsufficientStockException(item.ProductId, item.Quantity, product.AvailableQuantity);
+                        }
+                    }
+
+                    if (attempt == MaxConcurrencyRetries)
+                    {
+                        throw;
+                    }
+                }
+                catch (DbUpdateException)
+                {
+                    var concurrentReservations = await _dbContext.Reservations
+                        .AsNoTracking()
+                        .Where(r => r.OrderId == request.OrderId)
+                        .ToListAsync(ct);
+
+                    if (concurrentReservations.Count > 0)
+                    {
+                        return new StockReservationResponse(
+                            request.OrderId,
+                            concurrentReservations.Select(r => new ReservationItemResponse(r.ProductId, r.Quantity)).ToList(),
+                            concurrentReservations[0].Status);
+                    }
+
+                    throw;
+                }
             }
 
-            await _dbContext.SaveChangesAsync(ct);
-            await transaction.CommitAsync(ct);
-
-            _logger.LogInformation("Reserved stock for order {OrderId} across {Count} items",
-                request.OrderId, createdReservations.Count);
-
-            return new StockReservationResponse(
-                request.OrderId,
-                createdReservations.Select(r => new ReservationItemResponse(r.ProductId, r.Quantity)).ToList(),
-                ReservationStatus.Reserved);
+            throw new InvalidOperationException("Unreachable code after stock reservation retry loop.");
         });
     }
 

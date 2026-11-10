@@ -7,12 +7,15 @@ namespace Payment.Api.Services;
 
 public sealed class PaymentService : IPaymentService
 {
+    private const int MaxConcurrencyRetries = 3;
     private readonly PaymentDbContext _dbContext;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<PaymentService> _logger;
 
-    public PaymentService(PaymentDbContext dbContext, ILogger<PaymentService> logger)
+    public PaymentService(PaymentDbContext dbContext, TimeProvider timeProvider, ILogger<PaymentService> logger)
     {
         _dbContext = dbContext;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -88,41 +91,67 @@ public sealed class PaymentService : IPaymentService
         var strategy = _dbContext.Database.CreateExecutionStrategy();
         return await strategy.ExecuteAsync(async () =>
         {
-            try
+            for (var attempt = 1; attempt <= MaxConcurrencyRetries; attempt++)
             {
-                await using var transaction = await _dbContext.Database.BeginTransactionAsync(ct);
-
-                var account = await _dbContext.Accounts
-                    .Include(a => a.Holds)
-                    .FirstOrDefaultAsync(a => a.Id == request.AccountId, ct)
-                    ?? throw new AccountNotFoundException(request.AccountId);
-
-                var (hold, entry) = account.CreateHold(request.OrderId, request.Amount, request.Currency, request.IdempotencyKey);
-                _dbContext.Holds.Add(hold);
-                _dbContext.LedgerEntries.Add(entry);
-
-                await _dbContext.SaveChangesAsync(ct);
-                await transaction.CommitAsync(ct);
-
-                _logger.LogInformation("Created hold {HoldId} for order {OrderId} on account {AccountId}",
-                    hold.Id, hold.OrderId, account.Id);
-
-                return MapToResponse(hold);
-            }
-            catch (DbUpdateException)
-            {
-                var concurrentHold = await _dbContext.Holds
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(h => h.IdempotencyKey == request.IdempotencyKey, ct);
-
-                if (concurrentHold is not null)
+                try
                 {
-                    ValidateIdempotencyPayload(concurrentHold, request);
-                    return MapToResponse(concurrentHold);
-                }
+                    await using var transaction = await _dbContext.Database.BeginTransactionAsync(ct);
 
-                throw;
+                    var account = await _dbContext.Accounts
+                        .Include(a => a.Holds)
+                        .FirstOrDefaultAsync(a => a.Id == request.AccountId, ct)
+                        ?? throw new AccountNotFoundException(request.AccountId);
+
+                    var (hold, entry) = account.CreateHold(request.OrderId, request.Amount, request.Currency, request.IdempotencyKey);
+                    _dbContext.Holds.Add(hold);
+                    _dbContext.LedgerEntries.Add(entry);
+
+                    await _dbContext.SaveChangesAsync(ct);
+                    await transaction.CommitAsync(ct);
+
+                    _logger.LogInformation("Created hold {HoldId} for order {OrderId} on account {AccountId}",
+                        hold.Id, hold.OrderId, account.Id);
+
+                    return MapToResponse(hold);
+                }
+                catch (DbUpdateConcurrencyException ex)
+                {
+                    _logger.LogWarning(ex, "Concurrency conflict on hold creation for account {AccountId}, attempt {Attempt} of {MaxRetries}",
+                        request.AccountId, attempt, MaxConcurrencyRetries);
+
+                    _dbContext.ChangeTracker.Clear();
+
+                    var freshAccount = await _dbContext.Accounts
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(a => a.Id == request.AccountId, ct);
+
+                    if (freshAccount is not null && freshAccount.AvailableBalance < request.Amount)
+                    {
+                        throw new InsufficientFundsException(request.Amount, freshAccount.AvailableBalance, freshAccount.Currency);
+                    }
+
+                    if (attempt == MaxConcurrencyRetries)
+                    {
+                        throw;
+                    }
+                }
+                catch (DbUpdateException)
+                {
+                    var concurrentHold = await _dbContext.Holds
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(h => h.IdempotencyKey == request.IdempotencyKey, ct);
+
+                    if (concurrentHold is not null)
+                    {
+                        ValidateIdempotencyPayload(concurrentHold, request);
+                        return MapToResponse(concurrentHold);
+                    }
+
+                    throw;
+                }
             }
+
+            throw new InvalidOperationException("Unreachable code after concurrency retry loop.");
         });
     }
 

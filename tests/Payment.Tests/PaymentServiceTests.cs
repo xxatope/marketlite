@@ -24,7 +24,7 @@ public sealed class PaymentServiceTests
     public async Task CreateAccountAsync_PersistsAndReturnsAccount()
     {
         await using var db = CreateDbContext();
-        var service = new PaymentService(db, NullLogger<PaymentService>.Instance);
+        var service = new PaymentService(db, TimeProvider.System, NullLogger<PaymentService>.Instance);
         var userId = Guid.NewGuid();
 
         var response = await service.CreateAccountAsync(new CreateAccountRequest(userId, "RUB"));
@@ -43,7 +43,7 @@ public sealed class PaymentServiceTests
     public async Task DepositAsync_PersistsBalanceAndLedger()
     {
         await using var db = CreateDbContext();
-        var service = new PaymentService(db, NullLogger<PaymentService>.Instance);
+        var service = new PaymentService(db, TimeProvider.System, NullLogger<PaymentService>.Instance);
         var account = await service.CreateAccountAsync(new CreateAccountRequest(Guid.NewGuid(), "RUB"));
 
         var response = await service.DepositAsync(account.Id, new DepositRequest(500m, "Top up"));
@@ -60,7 +60,7 @@ public sealed class PaymentServiceTests
     public async Task CreateHoldAsync_IdempotentOnDuplicateKey()
     {
         await using var db = CreateDbContext();
-        var service = new PaymentService(db, NullLogger<PaymentService>.Instance);
+        var service = new PaymentService(db, TimeProvider.System, NullLogger<PaymentService>.Instance);
         var account = await service.CreateAccountAsync(new CreateAccountRequest(Guid.NewGuid(), "RUB"));
         await service.DepositAsync(account.Id, new DepositRequest(1000m, "Top up"));
 
@@ -83,7 +83,7 @@ public sealed class PaymentServiceTests
     public async Task CreateHoldAsync_ThrowsConflict_WhenPayloadMismatches()
     {
         await using var db = CreateDbContext();
-        var service = new PaymentService(db, NullLogger<PaymentService>.Instance);
+        var service = new PaymentService(db, TimeProvider.System, NullLogger<PaymentService>.Instance);
         var account = await service.CreateAccountAsync(new CreateAccountRequest(Guid.NewGuid(), "RUB"));
         await service.DepositAsync(account.Id, new DepositRequest(1000m, "Top up"));
 
@@ -100,7 +100,7 @@ public sealed class PaymentServiceTests
     public async Task CaptureHoldAsync_UpdatesDatabaseState()
     {
         await using var db = CreateDbContext();
-        var service = new PaymentService(db, NullLogger<PaymentService>.Instance);
+        var service = new PaymentService(db, TimeProvider.System, NullLogger<PaymentService>.Instance);
         var account = await service.CreateAccountAsync(new CreateAccountRequest(Guid.NewGuid(), "RUB"));
         await service.DepositAsync(account.Id, new DepositRequest(1000m, "Top up"));
         var hold = await service.CreateHoldAsync(new CreateHoldRequest(account.Id, Guid.NewGuid(), 300m, "RUB", "idem-cap-1"));
@@ -119,7 +119,7 @@ public sealed class PaymentServiceTests
     public async Task ReleaseHoldAsync_RestoresHeldBalance()
     {
         await using var db = CreateDbContext();
-        var service = new PaymentService(db, NullLogger<PaymentService>.Instance);
+        var service = new PaymentService(db, TimeProvider.System, NullLogger<PaymentService>.Instance);
         var account = await service.CreateAccountAsync(new CreateAccountRequest(Guid.NewGuid(), "RUB"));
         await service.DepositAsync(account.Id, new DepositRequest(1000m, "Top up"));
         var hold = await service.CreateHoldAsync(new CreateHoldRequest(account.Id, Guid.NewGuid(), 300m, "RUB", "idem-rel-1"));
@@ -138,7 +138,7 @@ public sealed class PaymentServiceTests
     public async Task LedgerReconciliation_StrictlyMatchesAccountBalance_AfterComplexSequence()
     {
         await using var db = CreateDbContext();
-        var service = new PaymentService(db, NullLogger<PaymentService>.Instance);
+        var service = new PaymentService(db, TimeProvider.System, NullLogger<PaymentService>.Instance);
         var account = await service.CreateAccountAsync(new CreateAccountRequest(Guid.NewGuid(), "RUB"));
 
         await service.DepositAsync(account.Id, new DepositRequest(2000m, "Initial topup"));

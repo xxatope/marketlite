@@ -24,7 +24,7 @@ public sealed class CatalogServiceTests
     public async Task CreateProductAsync_PersistsProduct()
     {
         await using var db = CreateDbContext();
-        var service = new CatalogService(db, NullLogger<CatalogService>.Instance);
+        var service = new CatalogService(db, TimeProvider.System, NullLogger<CatalogService>.Instance);
 
         var response = await service.CreateProductAsync(new CreateProductRequest("GPU RTX 5080", "Next-gen GPU", 1199.99m, 5));
 
@@ -43,7 +43,7 @@ public sealed class CatalogServiceTests
     public async Task AddStockAsync_UpdatesStockInDatabase()
     {
         await using var db = CreateDbContext();
-        var service = new CatalogService(db, NullLogger<CatalogService>.Instance);
+        var service = new CatalogService(db, TimeProvider.System, NullLogger<CatalogService>.Instance);
         var product = await service.CreateProductAsync(new CreateProductRequest("RAM DDR5", "32GB", 120m, 10));
 
         var updated = await service.AddStockAsync(product.Id, new AddStockRequest(15));
@@ -56,7 +56,7 @@ public sealed class CatalogServiceTests
     public async Task GetProductsAsync_ProvidesStablePaginationAcrossIdenticalNames()
     {
         await using var db = CreateDbContext();
-        var service = new CatalogService(db, NullLogger<CatalogService>.Instance);
+        var service = new CatalogService(db, TimeProvider.System, NullLogger<CatalogService>.Instance);
 
         for (var i = 0; i < 5; i++)
         {
@@ -72,10 +72,36 @@ public sealed class CatalogServiceTests
     }
 
     [Fact]
+    public async Task ReserveStockAsync_ConsolidatesDuplicateProductsInSameRequest()
+    {
+        await using var db = CreateDbContext();
+        var service = new CatalogService(db, TimeProvider.System, NullLogger<CatalogService>.Instance);
+        var p = await service.CreateProductAsync(new CreateProductRequest("RAM", "DDR5", 100m, 10));
+
+        var orderId = Guid.NewGuid();
+        var request = new ReserveStockRequest(orderId, new List<ReserveStockItem>
+        {
+            new(p.Id, 2),
+            new(p.Id, 3)
+        });
+
+        var response = await service.ReserveStockAsync(request);
+
+        Assert.Equal(ReservationStatus.Reserved, response.Status);
+        Assert.Single(response.Items);
+        Assert.Equal(5, response.Items[0].Quantity);
+
+        var reloaded = await service.GetProductByIdAsync(p.Id);
+        Assert.NotNull(reloaded);
+        Assert.Equal(5, reloaded.ReservedQuantity);
+        Assert.Equal(5, reloaded.AvailableQuantity);
+    }
+
+    [Fact]
     public async Task ReserveStockAsync_CreatesReservationsAndUpdatesAvailable()
     {
         await using var db = CreateDbContext();
-        var service = new CatalogService(db, NullLogger<CatalogService>.Instance);
+        var service = new CatalogService(db, TimeProvider.System, NullLogger<CatalogService>.Instance);
         var p1 = await service.CreateProductAsync(new CreateProductRequest("CPU", "8 cores", 300m, 10));
         var p2 = await service.CreateProductAsync(new CreateProductRequest("Motherboard", "B650", 180m, 8));
 
@@ -103,7 +129,7 @@ public sealed class CatalogServiceTests
     public async Task ConfirmStockAsync_DeductsFromPhysicalStock()
     {
         await using var db = CreateDbContext();
-        var service = new CatalogService(db, NullLogger<CatalogService>.Instance);
+        var service = new CatalogService(db, TimeProvider.System, NullLogger<CatalogService>.Instance);
         var p = await service.CreateProductAsync(new CreateProductRequest("SSD", "2TB NVMe", 150m, 20));
 
         var orderId = Guid.NewGuid();
@@ -124,7 +150,7 @@ public sealed class CatalogServiceTests
     public async Task ReleaseStockAsync_RestoresAvailableStock()
     {
         await using var db = CreateDbContext();
-        var service = new CatalogService(db, NullLogger<CatalogService>.Instance);
+        var service = new CatalogService(db, TimeProvider.System, NullLogger<CatalogService>.Instance);
         var p = await service.CreateProductAsync(new CreateProductRequest("Power Supply", "850W Gold", 130m, 10));
 
         var orderId = Guid.NewGuid();

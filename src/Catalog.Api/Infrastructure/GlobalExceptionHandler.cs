@@ -1,6 +1,7 @@
 using Catalog.Api.Domain;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace Catalog.Api.Infrastructure;
 
@@ -25,6 +26,9 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
 
             InsufficientStockException or FractionalCentsException =>
                 (StatusCodes.Status422UnprocessableEntity, "Unprocessable Entity", exception.Message),
+
+            DbUpdateConcurrencyException =>
+                (StatusCodes.Status409Conflict, "Concurrency Conflict", exception.Message),
 
             InvalidReservationStateException or ArgumentException or InvalidOperationException =>
                 (StatusCodes.Status400BadRequest, "Bad Request", exception.Message),
