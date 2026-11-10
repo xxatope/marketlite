@@ -1,6 +1,27 @@
+using Microsoft.EntityFrameworkCore;
+using Order.Api.Data;
+using Order.Api.DTOs;
+using Order.Api.Infrastructure;
+using Order.Api.Services;
+using Shared.Contracts.Messaging;
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
+builder.Services.AddSingleton(TimeProvider.System);
+
+var connectionString = builder.Configuration.GetConnectionString("OrderDb")
+    ?? throw new InvalidOperationException("Connection string 'OrderDb' not configured.");
+
+builder.Services.AddDbContext<OrderDbContext>(options =>
+    options.UseNpgsql(connectionString));
+
+var kafkaBootstrap = builder.Configuration.GetValue<string>("Kafka:BootstrapServers") ?? "localhost:9092";
+builder.Services.AddSingleton<IKafkaProducer>(_ => new KafkaProducer(kafkaBootstrap));
+
+builder.Services.AddScoped<IOrderService, OrderService>();
 
 var app = builder.Build();
 
@@ -9,30 +30,35 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
+app.UseExceptionHandler();
 app.UseHttpsRedirection();
 
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
+var orders = app.MapGroup("/api/orders").WithTags("Orders");
 
-app.MapGet("/weatherforecast", () =>
+orders.MapPost("/", async (CreateOrderRequest request, IOrderService service, CancellationToken ct) =>
 {
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
+    var created = await service.CreateOrderAsync(request, ct);
+    return Results.Created($"/api/orders/{created.Id}", created);
+});
+
+orders.MapGet("/{id:guid}", async (Guid id, IOrderService service, CancellationToken ct) =>
+{
+    var order = await service.GetOrderByIdAsync(id, ct);
+    return order is not null ? Results.Ok(order) : Results.NotFound();
+});
+
+orders.MapPost("/{id:guid}/confirm", async (Guid id, IOrderService service, CancellationToken ct) =>
+{
+    var confirmed = await service.ConfirmOrderAsync(id, ct);
+    return Results.Ok(confirmed);
+});
+
+orders.MapPost("/{id:guid}/cancel", async (Guid id, CancelOrderRequest request, IOrderService service, CancellationToken ct) =>
+{
+    var cancelled = await service.CancelOrderAsync(id, request.Reason, ct);
+    return Results.Ok(cancelled);
+});
+
+app.MapGet("/health", () => Results.Ok(new { status = "Healthy", service = "Order.Api" }));
 
 app.Run();
-
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
