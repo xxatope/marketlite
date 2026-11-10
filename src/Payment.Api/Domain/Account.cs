@@ -44,6 +44,8 @@ public sealed class Account
             throw new ArgumentOutOfRangeException(nameof(amount), "Deposit amount must be strictly positive.");
         }
 
+        EnsureTwoDecimalPlaces(amount);
+
         Balance += amount;
 
         var entry = new TransactionLedger(
@@ -58,14 +60,26 @@ public sealed class Account
         return entry;
     }
 
-    public (Hold Hold, TransactionLedger LedgerEntry) CreateHold(Guid orderId, decimal amount, string idempotencyKey)
+    public (Hold Hold, TransactionLedger LedgerEntry) CreateHold(
+        Guid orderId,
+        decimal amount,
+        string currency,
+        string idempotencyKey)
     {
         if (amount <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(amount), "Hold amount must be strictly positive.");
         }
 
+        EnsureTwoDecimalPlaces(amount);
+        ArgumentException.ThrowIfNullOrWhiteSpace(currency);
         ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
+
+        var normalizedCurrency = currency.Trim().ToUpperInvariant();
+        if (normalizedCurrency != Currency)
+        {
+            throw new CurrencyMismatchException(Currency, normalizedCurrency);
+        }
 
         if (AvailableBalance < amount)
         {
@@ -79,10 +93,10 @@ public sealed class Account
 
         var ledgerEntry = new TransactionLedger(
             Id,
-            -amount,
+            0m,
             TransactionType.HoldCreated,
             orderId.ToString(),
-            $"Hold created for order {orderId}",
+            $"Hold {amount} {Currency} created for order {orderId}",
             Balance);
 
         _ledgerEntries.Add(ledgerEntry);
@@ -122,7 +136,7 @@ public sealed class Account
 
         var ledgerEntry = new TransactionLedger(
             Id,
-            hold.Amount,
+            0m,
             TransactionType.HoldReleased,
             hold.OrderId.ToString(),
             string.IsNullOrWhiteSpace(reason) ? $"Released hold for order {hold.OrderId}" : reason,
@@ -130,5 +144,13 @@ public sealed class Account
 
         _ledgerEntries.Add(ledgerEntry);
         return ledgerEntry;
+    }
+
+    private static void EnsureTwoDecimalPlaces(decimal value)
+    {
+        if (decimal.Round(value, 2) != value)
+        {
+            throw new FractionalCentsException(value);
+        }
     }
 }

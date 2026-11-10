@@ -29,6 +29,12 @@ public sealed class ProductDomainTests
     }
 
     [Fact]
+    public void Create_ThrowsWhenPriceHasFractionalCents()
+    {
+        Assert.Throws<FractionalCentsException>(() => Product.Create("Item", "Desc", 19.999m, 10));
+    }
+
+    [Fact]
     public void AddStock_IncreasesStockQuantity()
     {
         var product = Product.Create("Mouse", "Wireless", 49.99m, 20);

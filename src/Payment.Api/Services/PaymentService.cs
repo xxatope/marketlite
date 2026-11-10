@@ -77,6 +77,8 @@ public sealed class PaymentService : IPaymentService
 
         if (existingHold is not null)
         {
+            ValidateIdempotencyPayload(existingHold, request);
+
             _logger.LogWarning("Duplicate hold request with key {Key}, returning existing hold {HoldId}",
                 request.IdempotencyKey, existingHold.Id);
 
@@ -86,24 +88,41 @@ public sealed class PaymentService : IPaymentService
         var strategy = _dbContext.Database.CreateExecutionStrategy();
         return await strategy.ExecuteAsync(async () =>
         {
-            await using var transaction = await _dbContext.Database.BeginTransactionAsync(ct);
+            try
+            {
+                await using var transaction = await _dbContext.Database.BeginTransactionAsync(ct);
 
-            var account = await _dbContext.Accounts
-                .Include(a => a.Holds)
-                .FirstOrDefaultAsync(a => a.Id == request.AccountId, ct)
-                ?? throw new AccountNotFoundException(request.AccountId);
+                var account = await _dbContext.Accounts
+                    .Include(a => a.Holds)
+                    .FirstOrDefaultAsync(a => a.Id == request.AccountId, ct)
+                    ?? throw new AccountNotFoundException(request.AccountId);
 
-            var (hold, entry) = account.CreateHold(request.OrderId, request.Amount, request.IdempotencyKey);
-            _dbContext.Holds.Add(hold);
-            _dbContext.LedgerEntries.Add(entry);
+                var (hold, entry) = account.CreateHold(request.OrderId, request.Amount, request.Currency, request.IdempotencyKey);
+                _dbContext.Holds.Add(hold);
+                _dbContext.LedgerEntries.Add(entry);
 
-            await _dbContext.SaveChangesAsync(ct);
-            await transaction.CommitAsync(ct);
+                await _dbContext.SaveChangesAsync(ct);
+                await transaction.CommitAsync(ct);
 
-            _logger.LogInformation("Created hold {HoldId} for order {OrderId} on account {AccountId}",
-                hold.Id, hold.OrderId, account.Id);
+                _logger.LogInformation("Created hold {HoldId} for order {OrderId} on account {AccountId}",
+                    hold.Id, hold.OrderId, account.Id);
 
-            return MapToResponse(hold);
+                return MapToResponse(hold);
+            }
+            catch (DbUpdateException)
+            {
+                var concurrentHold = await _dbContext.Holds
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(h => h.IdempotencyKey == request.IdempotencyKey, ct);
+
+                if (concurrentHold is not null)
+                {
+                    ValidateIdempotencyPayload(concurrentHold, request);
+                    return MapToResponse(concurrentHold);
+                }
+
+                throw;
+            }
         });
     }
 
@@ -185,6 +204,14 @@ public sealed class PaymentService : IPaymentService
                 e.BalanceAfter,
                 e.CreatedAt))
             .ToListAsync(ct);
+    }
+
+    private static void ValidateIdempotencyPayload(Hold existingHold, CreateHoldRequest request)
+    {
+        if (existingHold.OrderId != request.OrderId || existingHold.Amount != request.Amount)
+        {
+            throw new IdempotencyConflictException(request.IdempotencyKey);
+        }
     }
 
     private static AccountResponse MapToResponse(Account a) =>

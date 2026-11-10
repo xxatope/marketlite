@@ -53,6 +53,25 @@ public sealed class CatalogServiceTests
     }
 
     [Fact]
+    public async Task GetProductsAsync_ProvidesStablePaginationAcrossIdenticalNames()
+    {
+        await using var db = CreateDbContext();
+        var service = new CatalogService(db, NullLogger<CatalogService>.Instance);
+
+        for (var i = 0; i < 5; i++)
+        {
+            await service.CreateProductAsync(new CreateProductRequest("Identical Name", $"Desc {i}", 10m, 5));
+        }
+
+        var page1 = await service.GetProductsAsync(skip: 0, take: 2);
+        var page2 = await service.GetProductsAsync(skip: 2, take: 2);
+
+        Assert.Equal(2, page1.Count);
+        Assert.Equal(2, page2.Count);
+        Assert.DoesNotContain(page1, p1 => page2.Any(p2 => p2.Id == p1.Id));
+    }
+
+    [Fact]
     public async Task ReserveStockAsync_CreatesReservationsAndUpdatesAvailable()
     {
         await using var db = CreateDbContext();

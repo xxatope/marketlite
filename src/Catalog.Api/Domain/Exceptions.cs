@@ -30,3 +30,11 @@ public sealed class InvalidReservationStateException : CatalogDomainException
     {
     }
 }
+
+public sealed class FractionalCentsException : CatalogDomainException
+{
+    public FractionalCentsException(decimal price)
+        : base($"Price '{price}' cannot have more than 2 decimal places.")
+    {
+    }
+}

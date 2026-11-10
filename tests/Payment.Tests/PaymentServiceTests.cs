@@ -65,7 +65,7 @@ public sealed class PaymentServiceTests
         await service.DepositAsync(account.Id, new DepositRequest(1000m, "Top up"));
 
         var orderId = Guid.NewGuid();
-        var request = new CreateHoldRequest(account.Id, orderId, 250m, "idem-unique-key-999");
+        var request = new CreateHoldRequest(account.Id, orderId, 250m, "RUB", "idem-unique-key-999");
 
         var first = await service.CreateHoldAsync(request);
         var duplicate = await service.CreateHoldAsync(request);
@@ -80,13 +80,30 @@ public sealed class PaymentServiceTests
     }
 
     [Fact]
+    public async Task CreateHoldAsync_ThrowsConflict_WhenPayloadMismatches()
+    {
+        await using var db = CreateDbContext();
+        var service = new PaymentService(db, NullLogger<PaymentService>.Instance);
+        var account = await service.CreateAccountAsync(new CreateAccountRequest(Guid.NewGuid(), "RUB"));
+        await service.DepositAsync(account.Id, new DepositRequest(1000m, "Top up"));
+
+        var orderId = Guid.NewGuid();
+        var initialRequest = new CreateHoldRequest(account.Id, orderId, 250m, "RUB", "idem-conflict-key");
+        await service.CreateHoldAsync(initialRequest);
+
+        var conflictingRequest = new CreateHoldRequest(account.Id, orderId, 350m, "RUB", "idem-conflict-key");
+
+        await Assert.ThrowsAsync<IdempotencyConflictException>(() => service.CreateHoldAsync(conflictingRequest));
+    }
+
+    [Fact]
     public async Task CaptureHoldAsync_UpdatesDatabaseState()
     {
         await using var db = CreateDbContext();
         var service = new PaymentService(db, NullLogger<PaymentService>.Instance);
         var account = await service.CreateAccountAsync(new CreateAccountRequest(Guid.NewGuid(), "RUB"));
         await service.DepositAsync(account.Id, new DepositRequest(1000m, "Top up"));
-        var hold = await service.CreateHoldAsync(new CreateHoldRequest(account.Id, Guid.NewGuid(), 300m, "idem-cap-1"));
+        var hold = await service.CreateHoldAsync(new CreateHoldRequest(account.Id, Guid.NewGuid(), 300m, "RUB", "idem-cap-1"));
 
         var captured = await service.CaptureHoldAsync(new CaptureHoldRequest(hold.Id));
 
@@ -105,7 +122,7 @@ public sealed class PaymentServiceTests
         var service = new PaymentService(db, NullLogger<PaymentService>.Instance);
         var account = await service.CreateAccountAsync(new CreateAccountRequest(Guid.NewGuid(), "RUB"));
         await service.DepositAsync(account.Id, new DepositRequest(1000m, "Top up"));
-        var hold = await service.CreateHoldAsync(new CreateHoldRequest(account.Id, Guid.NewGuid(), 300m, "idem-rel-1"));
+        var hold = await service.CreateHoldAsync(new CreateHoldRequest(account.Id, Guid.NewGuid(), 300m, "RUB", "idem-rel-1"));
 
         var released = await service.ReleaseHoldAsync(new ReleaseHoldRequest(hold.Id, "Cancelled by user"));
 
@@ -115,5 +132,33 @@ public sealed class PaymentServiceTests
         Assert.Equal(1000m, refreshedAccount.Balance);
         Assert.Equal(0m, refreshedAccount.HeldBalance);
         Assert.Equal(1000m, refreshedAccount.AvailableBalance);
+    }
+
+    [Fact]
+    public async Task LedgerReconciliation_StrictlyMatchesAccountBalance_AfterComplexSequence()
+    {
+        await using var db = CreateDbContext();
+        var service = new PaymentService(db, NullLogger<PaymentService>.Instance);
+        var account = await service.CreateAccountAsync(new CreateAccountRequest(Guid.NewGuid(), "RUB"));
+
+        await service.DepositAsync(account.Id, new DepositRequest(2000m, "Initial topup"));
+        await service.DepositAsync(account.Id, new DepositRequest(500m, "Salary bonus"));
+
+        var hold1 = await service.CreateHoldAsync(new CreateHoldRequest(account.Id, Guid.NewGuid(), 700m, "RUB", "seq-hold-1"));
+        var hold2 = await service.CreateHoldAsync(new CreateHoldRequest(account.Id, Guid.NewGuid(), 400m, "RUB", "seq-hold-2"));
+
+        await service.CaptureHoldAsync(new CaptureHoldRequest(hold1.Id));
+        await service.ReleaseHoldAsync(new ReleaseHoldRequest(hold2.Id, "Item canceled"));
+
+        var refreshedAccount = await service.GetAccountByIdAsync(account.Id);
+        var ledger = await service.GetLedgerAsync(account.Id);
+
+        Assert.NotNull(refreshedAccount);
+        Assert.Equal(1800m, refreshedAccount.Balance);
+        Assert.Equal(0m, refreshedAccount.HeldBalance);
+        Assert.Equal(1800m, refreshedAccount.AvailableBalance);
+
+        var ledgerSum = ledger.Sum(l => l.Amount);
+        Assert.Equal(refreshedAccount.Balance, ledgerSum);
     }
 }

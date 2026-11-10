@@ -25,6 +25,7 @@ public sealed class Product
     public int ReservedQuantity { get; private set; }
     public int AvailableQuantity => StockQuantity - ReservedQuantity;
     public DateTime CreatedAt { get; private set; }
+    public uint Version { get; private set; }
 
     public static Product Create(string name, string description, decimal price, int initialStock)
     {
@@ -33,6 +34,11 @@ public sealed class Product
         if (price <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(price), "Price must be strictly positive.");
+        }
+
+        if (decimal.Round(price, 2) != price)
+        {
+            throw new FractionalCentsException(price);
         }
 
         if (initialStock < 0)

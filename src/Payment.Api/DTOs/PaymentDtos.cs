@@ -19,6 +19,7 @@ public sealed record CreateHoldRequest(
     Guid AccountId,
     Guid OrderId,
     decimal Amount,
+    string Currency,
     string IdempotencyKey);
 
 public sealed record HoldResponse(

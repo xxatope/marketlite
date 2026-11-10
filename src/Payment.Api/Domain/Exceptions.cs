@@ -38,3 +38,27 @@ public sealed class AccountNotFoundException : PaymentDomainException
     {
     }
 }
+
+public sealed class CurrencyMismatchException : PaymentDomainException
+{
+    public CurrencyMismatchException(string expected, string actual)
+        : base($"Currency mismatch. Account currency is '{expected}', but requested was '{actual}'.")
+    {
+    }
+}
+
+public sealed class FractionalCentsException : PaymentDomainException
+{
+    public FractionalCentsException(decimal amount)
+        : base($"Amount '{amount}' cannot have more than 2 decimal places.")
+    {
+    }
+}
+
+public sealed class IdempotencyConflictException : PaymentDomainException
+{
+    public IdempotencyConflictException(string key)
+        : base($"Idempotency conflict for key '{key}'. A hold already exists with differing payload parameters.")
+    {
+    }
+}

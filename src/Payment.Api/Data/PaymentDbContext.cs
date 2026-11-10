@@ -39,10 +39,15 @@ public sealed class PaymentDbContext : DbContext
             builder.Property(a => a.CreatedAt)
                 .IsRequired();
 
+            if (Database.IsNpgsql())
+            {
+                builder.Property(a => a.Version).IsRowVersion();
+            }
+
             builder.HasMany(a => a.Holds)
                 .WithOne()
                 .HasForeignKey(h => h.AccountId)
-                .OnDelete(DeleteBehavior.Cascade);
+                .OnDelete(DeleteBehavior.Restrict);
 
             builder.Navigation(a => a.Holds)
                 .UsePropertyAccessMode(PropertyAccessMode.Field);
@@ -50,12 +55,13 @@ public sealed class PaymentDbContext : DbContext
             builder.HasMany(a => a.LedgerEntries)
                 .WithOne()
                 .HasForeignKey(l => l.AccountId)
-                .OnDelete(DeleteBehavior.Cascade);
+                .OnDelete(DeleteBehavior.Restrict);
 
             builder.Navigation(a => a.LedgerEntries)
                 .UsePropertyAccessMode(PropertyAccessMode.Field);
 
-            builder.HasIndex(a => a.UserId);
+            builder.HasIndex(a => new { a.UserId, a.Currency })
+                .IsUnique();
         });
 
         modelBuilder.Entity<Hold>(builder =>

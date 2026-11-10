@@ -44,6 +44,11 @@ public sealed class CatalogDbContext : DbContext
             builder.Property(p => p.CreatedAt)
                 .IsRequired();
 
+            if (Database.IsNpgsql())
+            {
+                builder.Property(p => p.Version).IsRowVersion();
+            }
+
             builder.HasIndex(p => p.Name);
         });
 
@@ -59,8 +64,8 @@ public sealed class CatalogDbContext : DbContext
             builder.Property(r => r.CreatedAt)
                 .IsRequired();
 
-            builder.HasIndex(r => r.OrderId);
-            builder.HasIndex(r => r.ProductId);
+            builder.HasIndex(r => new { r.OrderId, r.ProductId })
+                .IsUnique();
         });
     }
 }

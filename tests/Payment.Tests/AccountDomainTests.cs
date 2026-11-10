@@ -33,6 +33,7 @@ public sealed class AccountDomainTests
         Assert.Equal(250.75m, entry.Amount);
         Assert.Equal(TransactionType.Deposit, entry.Type);
         Assert.Equal(250.75m, entry.BalanceAfter);
+        Assert.Equal(account.Balance, account.LedgerEntries.Sum(e => e.Amount));
     }
 
     [Theory]
@@ -46,20 +47,37 @@ public sealed class AccountDomainTests
     }
 
     [Fact]
-    public void CreateHold_LocksAvailableBalance_AndRecordsLedger()
+    public void Deposit_ThrowsWhenFractionalCentsProvided()
+    {
+        var account = Account.Create(Guid.NewGuid(), "RUB");
+
+        Assert.Throws<FractionalCentsException>(() => account.Deposit(10.001m, "Fractional"));
+    }
+
+    [Fact]
+    public void CreateHold_LocksAvailableBalance_AndMaintainsLedgerBalanceSum()
     {
         var account = Account.Create(Guid.NewGuid(), "RUB");
         account.Deposit(1000m, "Top up");
         var orderId = Guid.NewGuid();
 
-        var (hold, _) = account.CreateHold(orderId, 300m, "idemp-1");
+        var (hold, _) = account.CreateHold(orderId, 300m, "RUB", "idemp-1");
 
         Assert.Equal(1000m, account.Balance);
         Assert.Equal(300m, account.HeldBalance);
         Assert.Equal(700m, account.AvailableBalance);
         Assert.Equal(HoldStatus.Active, hold.Status);
         Assert.Equal(orderId, hold.OrderId);
-        Assert.Contains(account.LedgerEntries, e => e.Type == TransactionType.HoldCreated && e.Amount == -300m);
+        Assert.Equal(account.Balance, account.LedgerEntries.Sum(e => e.Amount));
+    }
+
+    [Fact]
+    public void CreateHold_ThrowsWhenCurrencyMismatches()
+    {
+        var account = Account.Create(Guid.NewGuid(), "RUB");
+        account.Deposit(500m, "Top up");
+
+        Assert.Throws<CurrencyMismatchException>(() => account.CreateHold(Guid.NewGuid(), 100m, "USD", "idemp-curr"));
     }
 
     [Fact]
@@ -68,15 +86,15 @@ public sealed class AccountDomainTests
         var account = Account.Create(Guid.NewGuid(), "RUB");
         account.Deposit(100m, "Top up");
 
-        Assert.Throws<InsufficientFundsException>(() => account.CreateHold(Guid.NewGuid(), 101m, "idemp-2"));
+        Assert.Throws<InsufficientFundsException>(() => account.CreateHold(Guid.NewGuid(), 101m, "RUB", "idemp-2"));
     }
 
     [Fact]
-    public void CaptureHold_DecreasesTotalBalanceAndHeldBalance()
+    public void CaptureHold_DecreasesTotalBalanceAndHeldBalance_AndMatchesLedgerSum()
     {
         var account = Account.Create(Guid.NewGuid(), "RUB");
         account.Deposit(1000m, "Top up");
-        var (hold, _) = account.CreateHold(Guid.NewGuid(), 400m, "idemp-3");
+        var (hold, _) = account.CreateHold(Guid.NewGuid(), 400m, "RUB", "idemp-3");
 
         account.CaptureHold(hold.Id);
 
@@ -85,15 +103,15 @@ public sealed class AccountDomainTests
         Assert.Equal(600m, account.AvailableBalance);
         Assert.Equal(HoldStatus.Captured, hold.Status);
         Assert.NotNull(hold.ResolvedAt);
-        Assert.Contains(account.LedgerEntries, e => e.Type == TransactionType.HoldCaptured && e.Amount == -400m);
+        Assert.Equal(account.Balance, account.LedgerEntries.Sum(e => e.Amount));
     }
 
     [Fact]
-    public void ReleaseHold_UnlocksHeldBalance()
+    public void ReleaseHold_UnlocksHeldBalance_AndMatchesLedgerSum()
     {
         var account = Account.Create(Guid.NewGuid(), "RUB");
         account.Deposit(1000m, "Top up");
-        var (hold, _) = account.CreateHold(Guid.NewGuid(), 400m, "idemp-4");
+        var (hold, _) = account.CreateHold(Guid.NewGuid(), 400m, "RUB", "idemp-4");
 
         account.ReleaseHold(hold.Id, "Item out of stock");
 
@@ -102,7 +120,7 @@ public sealed class AccountDomainTests
         Assert.Equal(1000m, account.AvailableBalance);
         Assert.Equal(HoldStatus.Released, hold.Status);
         Assert.NotNull(hold.ResolvedAt);
-        Assert.Contains(account.LedgerEntries, e => e.Type == TransactionType.HoldReleased && e.Amount == 400m);
+        Assert.Equal(account.Balance, account.LedgerEntries.Sum(e => e.Amount));
     }
 
     [Fact]
@@ -110,7 +128,7 @@ public sealed class AccountDomainTests
     {
         var account = Account.Create(Guid.NewGuid(), "RUB");
         account.Deposit(1000m, "Top up");
-        var (hold, _) = account.CreateHold(Guid.NewGuid(), 200m, "idemp-5");
+        var (hold, _) = account.CreateHold(Guid.NewGuid(), 200m, "RUB", "idemp-5");
         account.CaptureHold(hold.Id);
 
         Assert.Throws<InvalidHoldStateException>(() => account.CaptureHold(hold.Id));

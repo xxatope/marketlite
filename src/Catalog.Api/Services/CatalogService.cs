@@ -30,11 +30,19 @@ public sealed class CatalogService : ICatalogService
 
     public async Task<ProductResponse?> GetProductByIdAsync(Guid productId, CancellationToken ct = default)
     {
-        var product = await _dbContext.Products
+        return await _dbContext.Products
             .AsNoTracking()
-            .FirstOrDefaultAsync(p => p.Id == productId, ct);
-
-        return product is null ? null : MapToResponse(product);
+            .Where(p => p.Id == productId)
+            .Select(p => new ProductResponse(
+                p.Id,
+                p.Name,
+                p.Description,
+                p.Price,
+                p.StockQuantity,
+                p.ReservedQuantity,
+                p.StockQuantity - p.ReservedQuantity,
+                p.CreatedAt))
+            .FirstOrDefaultAsync(ct);
     }
 
     public async Task<IReadOnlyList<ProductResponse>> GetProductsAsync(int skip = 0, int take = 50, CancellationToken ct = default)
@@ -45,9 +53,18 @@ public sealed class CatalogService : ICatalogService
         return await _dbContext.Products
             .AsNoTracking()
             .OrderBy(p => p.Name)
+            .ThenBy(p => p.Id)
             .Skip(offset)
             .Take(limit)
-            .Select(p => MapToResponse(p))
+            .Select(p => new ProductResponse(
+                p.Id,
+                p.Name,
+                p.Description,
+                p.Price,
+                p.StockQuantity,
+                p.ReservedQuantity,
+                p.StockQuantity - p.ReservedQuantity,
+                p.CreatedAt))
             .ToListAsync(ct);
     }
 
@@ -70,6 +87,19 @@ public sealed class CatalogService : ICatalogService
         if (request.Items is null || request.Items.Count == 0)
         {
             throw new ArgumentException("Reservation items cannot be empty.", nameof(request.Items));
+        }
+
+        var existingReservations = await _dbContext.Reservations
+            .AsNoTracking()
+            .Where(r => r.OrderId == request.OrderId)
+            .ToListAsync(ct);
+
+        if (existingReservations.Count > 0)
+        {
+            return new StockReservationResponse(
+                request.OrderId,
+                existingReservations.Select(r => new ReservationItemResponse(r.ProductId, r.Quantity)).ToList(),
+                existingReservations[0].Status);
         }
 
         var strategy = _dbContext.Database.CreateExecutionStrategy();

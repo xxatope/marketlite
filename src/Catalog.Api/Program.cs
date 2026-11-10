@@ -1,17 +1,17 @@
 using Catalog.Api.Data;
-using Catalog.Api.Domain;
 using Catalog.Api.DTOs;
+using Catalog.Api.Infrastructure;
 using Catalog.Api.Services;
-using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
 builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 
 var connectionString = builder.Configuration.GetConnectionString("CatalogDb")
-    ?? "Host=localhost;Port=5432;Database=market_catalog;Username=market;Password=market";
+    ?? throw new InvalidOperationException("Connection string 'CatalogDb' not configured.");
 
 builder.Services.AddDbContext<CatalogDbContext>(options =>
     options.UseNpgsql(connectionString));
@@ -25,33 +25,7 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
-app.UseExceptionHandler(exceptionHandlerApp =>
-{
-    exceptionHandlerApp.Run(async context =>
-    {
-        var exception = context.Features.Get<IExceptionHandlerFeature>()?.Error;
-        var (status, title) = exception switch
-        {
-            ProductNotFoundException => (StatusCodes.Status404NotFound, "Product Not Found"),
-            InsufficientStockException => (StatusCodes.Status422UnprocessableEntity, "Insufficient Stock"),
-            InvalidReservationStateException or InvalidOperationException or ArgumentException => (StatusCodes.Status400BadRequest, "Bad Request"),
-            _ => (StatusCodes.Status500InternalServerError, "Internal Server Error")
-        };
-
-        var problem = new
-        {
-            Type = $"https://httpstatuses.com/{status}",
-            Title = title,
-            Status = status,
-            Detail = exception?.Message
-        };
-
-        context.Response.StatusCode = status;
-        context.Response.ContentType = "application/problem+json";
-        await context.Response.WriteAsJsonAsync(problem);
-    });
-});
-
+app.UseExceptionHandler();
 app.UseHttpsRedirection();
 
 var products = app.MapGroup("/api/products").WithTags("Products");

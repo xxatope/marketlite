@@ -1,17 +1,17 @@
-using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Payment.Api.Data;
-using Payment.Api.Domain;
 using Payment.Api.DTOs;
+using Payment.Api.Infrastructure;
 using Payment.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
 builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 
 var connectionString = builder.Configuration.GetConnectionString("PaymentDb")
-    ?? "Host=localhost;Port=5432;Database=market_payments;Username=market;Password=market";
+    ?? throw new InvalidOperationException("Connection string 'PaymentDb' not configured.");
 
 builder.Services.AddDbContext<PaymentDbContext>(options =>
     options.UseNpgsql(connectionString));
@@ -25,33 +25,7 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
-app.UseExceptionHandler(exceptionHandlerApp =>
-{
-    exceptionHandlerApp.Run(async context =>
-    {
-        var exception = context.Features.Get<IExceptionHandlerFeature>()?.Error;
-        var (status, title) = exception switch
-        {
-            AccountNotFoundException or HoldNotFoundException => (StatusCodes.Status404NotFound, "Resource Not Found"),
-            InsufficientFundsException => (StatusCodes.Status422UnprocessableEntity, "Insufficient Funds"),
-            InvalidHoldStateException or ArgumentException => (StatusCodes.Status400BadRequest, "Bad Request"),
-            _ => (StatusCodes.Status500InternalServerError, "Internal Server Error")
-        };
-
-        var problem = new
-        {
-            Type = $"https://httpstatuses.com/{status}",
-            Title = title,
-            Status = status,
-            Detail = exception?.Message
-        };
-
-        context.Response.StatusCode = status;
-        context.Response.ContentType = "application/problem+json";
-        await context.Response.WriteAsJsonAsync(problem);
-    });
-});
-
+app.UseExceptionHandler();
 app.UseHttpsRedirection();
 
 var accounts = app.MapGroup("/api/accounts").WithTags("Accounts");
