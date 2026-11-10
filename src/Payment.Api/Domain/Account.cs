@@ -58,7 +58,7 @@ public sealed class Account
         return entry;
     }
 
-    public Hold CreateHold(Guid orderId, decimal amount, string idempotencyKey)
+    public (Hold Hold, TransactionLedger LedgerEntry) CreateHold(Guid orderId, decimal amount, string idempotencyKey)
     {
         if (amount <= 0)
         {
@@ -86,10 +86,10 @@ public sealed class Account
             Balance);
 
         _ledgerEntries.Add(ledgerEntry);
-        return hold;
+        return (hold, ledgerEntry);
     }
 
-    public void CaptureHold(Guid holdId)
+    public TransactionLedger CaptureHold(Guid holdId)
     {
         var hold = _holds.FirstOrDefault(h => h.Id == holdId)
             ?? throw new HoldNotFoundException(holdId);
@@ -108,9 +108,10 @@ public sealed class Account
             Balance);
 
         _ledgerEntries.Add(ledgerEntry);
+        return ledgerEntry;
     }
 
-    public void ReleaseHold(Guid holdId, string reason)
+    public TransactionLedger ReleaseHold(Guid holdId, string reason)
     {
         var hold = _holds.FirstOrDefault(h => h.Id == holdId)
             ?? throw new HoldNotFoundException(holdId);
@@ -128,5 +129,6 @@ public sealed class Account
             Balance);
 
         _ledgerEntries.Add(ledgerEntry);
+        return ledgerEntry;
     }
 }

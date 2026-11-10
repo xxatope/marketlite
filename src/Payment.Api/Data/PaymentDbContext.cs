@@ -39,9 +39,6 @@ public sealed class PaymentDbContext : DbContext
             builder.Property(a => a.CreatedAt)
                 .IsRequired();
 
-            builder.Property(a => a.Version)
-                .IsConcurrencyToken();
-
             builder.HasMany(a => a.Holds)
                 .WithOne()
                 .HasForeignKey(h => h.AccountId)
